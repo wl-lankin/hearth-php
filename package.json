@@ -1,0 +1,13 @@
+{
+  "name": "hearth-php",
+  "version": "0.1.0",
+  "description": "PHP builds and the signed download catalog for Hearth.",
+  "author": "Wolfgang Linz <https://wolfgang-linz.de>",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "generate": "node scripts/generate.mjs"
+  }
+}
