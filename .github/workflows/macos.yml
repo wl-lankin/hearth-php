@@ -62,6 +62,16 @@ jobs:
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
           ./spc build "$EXT" --build-cli --build-fpm --build-shared=xdebug
+      - name: Build logs
+        # spc keeps the compiler output in its log files, not in the step output.
+        if: failure()
+        run: |
+          for f in $(find log -name '*.log' 2>/dev/null); do
+            echo "::group::$f"
+            grep -nE 'error:|Error [0-9]+|undefined symbol' "$f" | tail -n 40 || true
+            tail -n 80 "$f"
+            echo "::endgroup::"
+          done
       - name: Package
         id: package
         run: |
