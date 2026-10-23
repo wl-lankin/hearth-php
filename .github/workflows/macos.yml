@@ -57,7 +57,13 @@ jobs:
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
           # Sources only (no --prefer-pre-built): libraries are built here from their upstream sources.
-          ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug"
+          # Hosted runners occasionally fail DNS or drop connections: retry before failing the build.
+          for attempt in 1 2 3; do
+            ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug" && exit 0
+            echo "::warning::download attempt $attempt failed"
+            sleep $((attempt * 30))
+          done
+          exit 1
       - name: Build PHP ${{ matrix.php }}
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
