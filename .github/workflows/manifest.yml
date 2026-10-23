@@ -1,0 +1,86 @@
+name: manifest
+
+# Weekly: builds macOS PHP for every minor with a new patch, regenerates the catalog and publishes
+# manifest.json + manifest.json.sig (plus the CA bundle and the macOS entry list) to the release
+# "manifest". Hearth reads releases/download/manifest/manifest.json.
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One publish at a time: overlapping runs could upload a manifest and a signature that do not belong
+# together.
+concurrency:
+  group: manifest
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    # Only reads php.net and this repo's releases.
+    permissions:
+      contents: read
+    outputs:
+      minors: ${{ steps.plan.outputs.minors }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "minors=$(node scripts/plan.mjs)" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: plan
+    if: needs.plan.outputs.minors != '[]'
+    uses: ./.github/workflows/macos.yml
+    with:
+      minors: ${{ needs.plan.outputs.minors }}
+
+  publish:
+    needs: [plan, macos]
+    # Also runs when no macOS build was needed (macos skipped), never after a failed build.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.macos.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Previous macOS entries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download manifest --pattern macos-entries.json --dir previous || echo "no previous catalog"
+      - name: New macOS entries
+        if: needs.macos.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-entries
+          path: built
+      - run: node scripts/macos-entry.mjs merge macos-entries.json previous/macos-entries.json built/macos-entries.json
+      - run: node scripts/generate.mjs
+      - name: Sign
+        env:
+          HEARTH_PHP_SIGNING_KEY: ${{ secrets.HEARTH_PHP_SIGNING_KEY }}
+          HEARTH_PHP_SIGNING_KEY_PASSWORD: ${{ secrets.HEARTH_PHP_SIGNING_KEY_PASSWORD }}
+        run: node scripts/sign.mjs
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp macos-entries.json dist/
+          gh release view manifest >/dev/null 2>&1 \
+            || gh release create manifest --title "PHP catalog" --notes "The signed catalog Hearth installs PHP from. Updated weekly." --latest=false
+          gh release upload manifest dist/manifest.json dist/manifest.json.sig dist/macos-entries.json dist/cacert-*.pem --clobber
