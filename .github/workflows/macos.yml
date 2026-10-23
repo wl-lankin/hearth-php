@@ -48,6 +48,11 @@ jobs:
           tar xzf spc.tar.gz && chmod +x spc && ./spc --version
           ./spc doctor --auto-fix
       - name: Build PHP ${{ matrix.php }}
+        env:
+          # spc looks up library versions through the GitHub API; anonymous calls from shared runners
+          # hit the rate limit (403) and then fall back to sources its recipes cannot build. This
+          # job's token is read-only (permissions: contents: read).
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
           # Sources only (no --prefer-pre-built): libraries are built here from their upstream sources.
