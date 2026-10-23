@@ -55,14 +55,12 @@ jobs:
           # step below runs the libraries' own build scripts without it.
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          EXT="$(tr -d '
- ' < build/extensions.txt)"
+          EXT="$(tr -d '\n ' < build/extensions.txt)"
           # Sources only (no --prefer-pre-built): libraries are built here from their upstream sources.
           ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug"
       - name: Build PHP ${{ matrix.php }}
         run: |
-          EXT="$(tr -d '
- ' < build/extensions.txt)"
+          EXT="$(tr -d '\n ' < build/extensions.txt)"
           ./spc build "$EXT" --build-cli --build-fpm --build-shared=xdebug
       - name: Package
         id: package
