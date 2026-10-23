@@ -47,11 +47,20 @@ jobs:
           echo "${{ matrix.target.spc_sha256 }}  spc.tar.gz" | shasum -a 256 -c -
           tar xzf spc.tar.gz && chmod +x spc && ./spc --version
           ./spc doctor --auto-fix
-      - name: Build PHP ${{ matrix.php }}
+      - name: Download sources for PHP ${{ matrix.php }}
+        env:
+          # spc looks up library versions through the GitHub API; anonymous calls from shared runners
+          # hit the rate limit (403) and then fall back to sources its recipes cannot build. The
+          # token is read-only (permissions: contents: read) and only this step sees it: the build
+          # step below runs the libraries' own build scripts without it.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
           # Sources only (no --prefer-pre-built): libraries are built here from their upstream sources.
           ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug"
+      - name: Build PHP ${{ matrix.php }}
+        run: |
+          EXT="$(tr -d '\n ' < build/extensions.txt)"
           ./spc build "$EXT" --build-cli --build-fpm --build-shared=xdebug
       - name: Package
         id: package
