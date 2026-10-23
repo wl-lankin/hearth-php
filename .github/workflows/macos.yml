@@ -1,7 +1,9 @@
 name: macos
 
-# Builds PHP for macOS (cli + fpm, arm64 and x86_64) with static-php-cli, smoke-tests every build,
-# uploads it to the release php-<version> and hands its catalog entry to the caller as the artifact
+# Builds PHP for macOS (cli + fpm, arm64 and x86_64) with static-php-cli and smoke-tests every build.
+# The build jobs run third-party code (Homebrew packages, dependency build scripts) and therefore get
+# a read-only token; a separate job with write access only receives the finished archives, uploads
+# them to the release php-<version> and hands the catalog entries to the caller as the artifact
 # macos-entries.
 
 on:
@@ -17,7 +19,7 @@ on:
         default: '["8.1","8.2","8.3","8.4","8.5"]'
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   SPC_VERSION: '2.8.5'
@@ -34,6 +36,8 @@ jobs:
     runs-on: ${{ matrix.target.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -46,7 +50,8 @@ jobs:
       - name: Build PHP ${{ matrix.php }}
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
-          ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug" --prefer-pre-built
+          # Sources only (no --prefer-pre-built): libraries are built here from their upstream sources.
+          ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug"
           ./spc build "$EXT" --build-cli --build-fpm --build-shared=xdebug
       - name: Package
         id: package
@@ -73,41 +78,50 @@ jobs:
           "$DIR/bin/php" -d "zend_extension=$PWD/$DIR/lib/xdebug.so" -v | grep -q Xdebug
           printf '[global]\nerror_log=/tmp/fpm.log\n[www]\nlisten=127.0.0.1:9999\npm=static\npm.max_children=1\n' > fpm.conf
           "$DIR/sbin/php-fpm" -t -y fpm.conf
-      - name: Upload to the release
-        id: upload
+      - name: Archive and catalog entry
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.package.outputs.version }}
           DIR: ${{ steps.package.outputs.dir }}
         run: |
+          mkdir out
           FILE="php-$VERSION-macos-${{ matrix.target.arch }}.tar.gz"
-          tar czf "$FILE" "$DIR"
-          # Both architectures of a version share one release; whichever job is first creates it.
-          gh release view "php-$VERSION" >/dev/null 2>&1 \
-            || gh release create "php-$VERSION" --title "PHP $VERSION for macOS" --notes "Built with static-php-cli $SPC_VERSION." \
-            || gh release view "php-$VERSION" >/dev/null
-          gh release upload "php-$VERSION" "$FILE" --clobber
+          tar czf "out/$FILE" "$DIR"
           URL="https://github.com/$GITHUB_REPOSITORY/releases/download/php-$VERSION/$FILE"
-          node scripts/macos-entry.mjs entry "$VERSION" "${{ matrix.target.arch }}" "$URL" "$FILE" > "entry.json"
+          node scripts/macos-entry.mjs entry "$VERSION" "${{ matrix.target.arch }}" "$URL" "out/$FILE" > out/entry.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: entry-${{ matrix.php }}-${{ matrix.target.arch }}
-          path: entry.json
+          name: build-${{ matrix.php }}-${{ matrix.target.arch }}
+          path: out/
 
-  collect:
+  release:
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: entry-*
-          path: entries
-      - run: node scripts/macos-entry.mjs merge macos-entries.json entries/*/entry.json
+          pattern: build-*
+          path: builds
+      - name: Upload the archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for file in builds/*/php-*-macos-*.tar.gz; do
+            name="$(basename "$file")"
+            version="${name#php-}"; version="${version%-macos-*}"
+            gh release view "php-$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || gh release create "php-$version" --repo "$GITHUB_REPOSITORY" --title "PHP $version for macOS" --notes "Built with static-php-cli $SPC_VERSION."
+            gh release upload "php-$version" "$file" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+      - run: node scripts/macos-entry.mjs merge macos-entries.json builds/*/entry.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-entries

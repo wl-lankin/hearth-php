@@ -32,3 +32,22 @@ test('merging keeps one build per minor and arch, the newest version wins', () =
     ['8.3.36/arm64', '8.4.26/x86_64', '8.4.27/arm64'],
   );
 });
+
+test('only entries pointing at this repo\'s own php release pass the check', async () => {
+  const { checkEntry } = await import('../scripts/macos-entry.mjs');
+  const repo = 'wl-lankin/hearth-php';
+  const good = macosEntry({
+    version: '8.4.27', arch: 'arm64', sha256: sha, size: 1,
+    url: `https://github.com/${repo}/releases/download/php-8.4.27/php-8.4.27-macos-arm64.tar.gz`,
+  });
+  assert.doesNotThrow(() => checkEntry(repo, good));
+  for (const url of [
+    'https://evil.test/php-8.4.27-macos-arm64.tar.gz',
+    `https://github.com/someone/else/releases/download/php-8.4.27/php-8.4.27-macos-arm64.tar.gz`,
+    `https://github.com/${repo}/releases/download/php-8.4.26/php-8.4.27-macos-arm64.tar.gz`,
+    `https://github.com/${repo}/releases/download/php-8.4.27/php-8.4.27-macos-x86_64.tar.gz`,
+  ]) {
+    assert.throws(() => checkEntry(repo, { ...good, url }), /not a hearth-php macOS build/, url);
+  }
+  assert.throws(() => checkEntry(repo, { ...good, os: 'windows' }), /not a hearth-php macOS build/);
+});

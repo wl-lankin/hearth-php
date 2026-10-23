@@ -23,6 +23,17 @@ export function macosEntry({ version, arch, url, sha256, size }) {
   };
 }
 
+/**
+ * Throws unless `e` is a macOS build released by this repo: the list of earlier builds is read back
+ * from a release asset before it is signed again, so it must not be able to point anywhere else.
+ */
+export function checkEntry(repo, e) {
+  const expected = `https://github.com/${repo}/releases/download/php-${e.version}/php-${e.version}-macos-${e.arch}.tar.gz`;
+  if (e.os !== 'macos' || e.url !== expected || !/^[0-9a-f]{64}$/.test(e.sha256 ?? '')) {
+    throw new Error(`${e.url} is not a hearth-php macOS build`);
+  }
+}
+
 /** One entry per minor and arch (the newest version wins), sorted by version, then arch. */
 export function mergeEntries(...lists) {
   const best = new Map();
@@ -43,7 +54,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   } else if (command === 'merge') {
     const [out, ...inputs] = args;
     const read = (f) => (existsSync(f) ? [].concat(JSON.parse(readFileSync(f, 'utf8'))) : []);
-    writeFileSync(out, `${JSON.stringify(mergeEntries(...inputs.map(read)), null, 2)}\n`);
+    const merged = mergeEntries(...inputs.map(read));
+    const repo = process.env.GITHUB_REPOSITORY ?? 'wl-lankin/hearth-php';
+    merged.forEach((e) => checkEntry(repo, e));
+    writeFileSync(out, `${JSON.stringify(merged, null, 2)}\n`);
   } else {
     console.error('usage: macos-entry.mjs entry <version> <arch> <url> <archive> | merge <out> <in...>');
     process.exit(2);
