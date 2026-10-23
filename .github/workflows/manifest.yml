@@ -70,7 +70,11 @@ jobs:
           name: macos-entries
           path: built
       - run: node scripts/macos-entry.mjs merge macos-entries.json previous/macos-entries.json built/macos-entries.json
-      - run: node scripts/generate.mjs
+      - name: Generate the catalog
+        env:
+          # Only for GitHub API calls (Caddy's release); generate.mjs sends it to api.github.com only.
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/generate.mjs
       - name: Sign
         env:
           HEARTH_PHP_SIGNING_KEY: ${{ secrets.HEARTH_PHP_SIGNING_KEY }}

@@ -4,6 +4,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { validate } from '../lib/manifest.mjs';
+import { caddyEntries } from './caddy.mjs';
+import { headersFor } from './plan.mjs';
 import { QA, RELEASES, windowsEntries } from './windows.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY ?? 'wl-lankin/hearth-php';
@@ -11,7 +13,9 @@ const REPO = process.env.GITHUB_REPOSITORY ?? 'wl-lankin/hearth-php';
 const HEADERS = { 'User-Agent': 'hearth-php manifest generator (+https://github.com/wl-lankin/hearth-php)' };
 
 async function get(url) {
-  const res = await fetch(url, { headers: HEADERS, redirect: 'follow' });
+  // The GitHub token (rate limits) goes to the GitHub API only.
+  const headers = { ...HEADERS, ...headersFor(url, process.env.GH_TOKEN), 'User-Agent': HEADERS['User-Agent'] };
+  const res = await fetch(url, { headers, redirect: 'follow' });
   if (!res.ok) throw Object.assign(new Error(`${url}: HTTP ${res.status}`), { status: res.status });
   return res;
 }
@@ -41,6 +45,15 @@ async function cacert() {
   return { file, url: `https://github.com/${REPO}/releases/download/manifest/${file}`, sha256: hash };
 }
 
+async function caddy() {
+  const release = await json('https://api.github.com/repos/caddyserver/caddy/releases/latest');
+  const version = release.tag_name.replace(/^v/, '');
+  const sums = release.assets.find((a) => a.name === `caddy_${version}_checksums.txt`);
+  if (!sums) throw new Error(`caddy ${version}: checksums.txt is missing`);
+  const checksums = await (await get(sums.browser_download_url)).text();
+  return caddyEntries({ release, checksums, fetchBytes: bytes });
+}
+
 mkdirSync('dist', { recursive: true });
 const windowsOnly = process.argv.includes('--windows-only');
 const pins = JSON.parse(readFileSync('pins.json', 'utf8'));
@@ -58,6 +71,7 @@ const manifest = {
   php: [...windows, ...macos],
   composer: await composer(),
   cacert: { url: ca.url, sha256: ca.sha256 },
+  tools: { caddy: await caddy() },
 };
 const errors = validate(manifest);
 if (errors.length) {
