@@ -15,6 +15,9 @@ permissions:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    # Only reads php.net and this repo's releases.
+    permissions:
+      contents: read
     outputs:
       minors: ${{ steps.plan.outputs.minors }}
     steps:

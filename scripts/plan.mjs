@@ -12,16 +12,22 @@ export function minorsToBuild(latest, releases) {
     .map(([minor]) => minor);
 }
 
+/** Request headers for `url`: the GitHub token goes to the GitHub API only, never to other hosts. */
+export function headersFor(url, token) {
+  const headers = { 'User-Agent': 'hearth-php' };
+  if (token && new URL(url).hostname === 'api.github.com') headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const repo = process.env.GITHUB_REPOSITORY ?? 'wl-lankin/hearth-php';
-  const headers = { 'User-Agent': 'hearth-php', ...(process.env.GH_TOKEN ? { Authorization: `Bearer ${process.env.GH_TOKEN}` } : {}) };
+  const get = (url) => fetch(url, { headers: headersFor(url, process.env.GH_TOKEN) });
   const latest = {};
   for (const minor of SUPPORTED) {
-    const res = await fetch(`https://www.php.net/releases/?json&version=${minor}`, { headers });
-    latest[minor] = (await res.json()).version;
+    latest[minor] = (await (await get(`https://www.php.net/releases/?json&version=${minor}`)).json()).version;
   }
   const releases = {};
-  const list = await (await fetch(`https://api.github.com/repos/${repo}/releases?per_page=100`, { headers })).json();
+  const list = await (await get(`https://api.github.com/repos/${repo}/releases?per_page=100`)).json();
   for (const r of Array.isArray(list) ? list : []) releases[r.tag_name] = r.assets.map((a) => a.name);
   console.log(JSON.stringify(minorsToBuild(latest, releases)));
 }

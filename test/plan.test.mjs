@@ -17,3 +17,11 @@ test('only minors whose newest patch has no complete macOS release are built', (
 test('nothing to build when every newest patch is released for both architectures', () => {
   assert.deepEqual(minorsToBuild({ '8.4': '8.4.27' }, { 'php-8.4.27': assets('8.4.27') }), []);
 });
+
+test('the GitHub token is only sent to the GitHub API', async () => {
+  const { headersFor } = await import('../scripts/plan.mjs');
+  assert.equal(headersFor('https://api.github.com/repos/x/y/releases', 'secret').Authorization, 'Bearer secret');
+  assert.equal(headersFor('https://www.php.net/releases/?json&version=8.4', 'secret').Authorization, undefined);
+  assert.equal(headersFor('https://api.github.com.evil.test/x', 'secret').Authorization, undefined);
+  assert.equal(headersFor('https://api.github.com/x', undefined).Authorization, undefined);
+});
