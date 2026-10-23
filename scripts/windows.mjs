@@ -29,8 +29,9 @@ function previews(feed, qaFeed) {
  */
 export async function windowsEntries({ feed, qaFeed, pins, hash }) {
   const builds = [
-    ...pickLatest(feed, SUPPORTED).map((b) => ({ ...b, channel: 'stable', url: `${RELEASES}/${b.path}` })),
-    ...previews(feed, qaFeed).map((b) => ({ ...b, channel: 'rc', url: `${QA}/${b.path}` })),
+    // archives/ keeps every build (also the current one); the top folder drops a patch on release day.
+    ...pickLatest(feed, SUPPORTED).map((b) => ({ ...b, channel: 'stable', url: `${RELEASES}/archives/${b.path}` })),
+    ...previews(feed, qaFeed).map((b) => ({ ...b, channel: 'rc', url: `${QA}/archives/${b.path}` })),
   ];
   const entries = [];
   for (const b of builds) {

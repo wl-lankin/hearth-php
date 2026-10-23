@@ -38,8 +38,8 @@ test('one entry per supported stable minor plus the newest preview', async () =>
     ['8.5', '8.5.12', 'stable'],
     ['8.6', '8.6.0RC4', 'rc'],
   ]);
-  assert.equal(entries[0].url, `${RELEASES}/php-8.4.27-nts-Win32-vs17-x64.zip`);
-  assert.equal(entries[2].url, 'https://downloads.php.net/~windows/qa/php-8.6.0RC4-nts-Win32-vs18-x64.zip');
+  assert.equal(entries[0].url, `${RELEASES}/archives/php-8.4.27-nts-Win32-vs17-x64.zip`);
+  assert.equal(entries[2].url, 'https://downloads.php.net/~windows/qa/archives/php-8.6.0RC4-nts-Win32-vs18-x64.zip');
   assert.deepEqual(validate(base(entries)), []);
 });
 
