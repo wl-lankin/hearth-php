@@ -51,3 +51,22 @@ test('only entries pointing at this repo\'s own php release pass the check', asy
   }
   assert.throws(() => checkEntry(repo, { ...good, os: 'windows' }), /not a hearth-php macOS build/);
 });
+
+test('entries come straight from the php-<version> releases', async () => {
+  const { entriesFromReleases } = await import('../scripts/macos-entry.mjs');
+  const repo = 'wl-lankin/hearth-php';
+  const asset = (v, arch) => ({
+    name: `php-${v}-macos-${arch}.tar.gz`, size: 31000000,
+    browser_download_url: `https://github.com/${repo}/releases/download/php-${v}/php-${v}-macos-${arch}.tar.gz`,
+  });
+  const releases = [
+    { tag_name: 'php-8.4.27', assets: [asset('8.4.27', 'arm64'), asset('8.4.27', 'x86_64')] },
+    { tag_name: 'php-8.3.36', assets: [asset('8.3.36', 'arm64'), { name: 'notes.txt', browser_download_url: 'x', size: 1 }] },
+    { tag_name: 'manifest', assets: [{ name: 'manifest.json', browser_download_url: 'y', size: 1 }] },
+    { tag_name: 'php-8.2.35', assets: [asset('8.4.27', 'arm64')] },
+  ];
+  const hash = async () => 'e'.repeat(64);
+  const entries = await entriesFromReleases(repo, releases, hash);
+  assert.deepEqual(entries.map((e) => `${e.version}/${e.arch}`), ['8.3.36/arm64', '8.4.27/arm64', '8.4.27/x86_64']);
+  assert.equal(entries[0].size, 31000000);
+});

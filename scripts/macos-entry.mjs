@@ -1,5 +1,6 @@
 // Catalog entries for the macOS builds made by .github/workflows/macos.yml.
 //   node scripts/macos-entry.mjs entry <version> <arch> <url> <archive>   prints one entry as JSON
+//   node scripts/macos-entry.mjs releases <out.json>                      entries of every released macOS build
 //   node scripts/macos-entry.mjs merge <out.json> <in.json...>            merges entry lists into out.json
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -34,6 +35,26 @@ export function checkEntry(repo, e) {
   }
 }
 
+/**
+ * The catalog entries of every macOS build already released here: archives named
+ * php-<version>-macos-<arch>.tar.gz in the release php-<version>. `hash(url)` returns an archive's
+ * SHA-256. The releases are the source of truth, so no entry depends on an earlier catalog.
+ */
+export async function entriesFromReleases(repo, releases, hash) {
+  const entries = [];
+  for (const release of releases) {
+    const version = release.tag_name.startsWith('php-') ? release.tag_name.slice(4) : null;
+    if (!version) continue;
+    for (const asset of release.assets) {
+      const match = /^php-(.+)-macos-(arm64|x86_64)\.tar\.gz$/.exec(asset.name);
+      if (!match || match[1] !== version) continue;
+      const url = `https://github.com/${repo}/releases/download/php-${version}/${asset.name}`;
+      entries.push(macosEntry({ version, arch: match[2], url, sha256: await hash(url), size: asset.size }));
+    }
+  }
+  return mergeEntries(entries);
+}
+
 /** One entry per minor and arch (the newest version wins), sorted by version, then arch. */
 export function mergeEntries(...lists) {
   const best = new Map();
@@ -51,6 +72,21 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const [version, arch, url, archive] = args;
     const sha256 = createHash('sha256').update(readFileSync(archive)).digest('hex');
     console.log(JSON.stringify(macosEntry({ version, arch, url, sha256, size: statSync(archive).size })));
+  } else if (command === 'releases') {
+    const [out] = args;
+    const repo = process.env.GITHUB_REPOSITORY ?? 'wl-lankin/hearth-php';
+    const { headersFor } = await import('./plan.mjs');
+    const api = `https://api.github.com/repos/${repo}/releases?per_page=100`;
+    const releases = await (await fetch(api, { headers: headersFor(api, process.env.GH_TOKEN) })).json();
+    const hash = async (url) => {
+      const res = await fetch(url, { headers: { 'User-Agent': 'hearth-php' }, redirect: 'follow' });
+      if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+      return createHash('sha256').update(Buffer.from(await res.arrayBuffer())).digest('hex');
+    };
+    const entries = await entriesFromReleases(repo, Array.isArray(releases) ? releases : [], hash);
+    entries.forEach((e) => checkEntry(repo, e));
+    writeFileSync(out, `${JSON.stringify(entries, null, 2)}\n`);
+    console.log(`${out}: ${entries.length} macOS builds`);
   } else if (command === 'merge') {
     const [out, ...inputs] = args;
     const read = (f) => (existsSync(f) ? [].concat(JSON.parse(readFileSync(f, 'utf8'))) : []);
@@ -59,7 +95,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     merged.forEach((e) => checkEntry(repo, e));
     writeFileSync(out, `${JSON.stringify(merged, null, 2)}\n`);
   } else {
-    console.error('usage: macos-entry.mjs entry <version> <arch> <url> <archive> | merge <out> <in...>');
+    console.error('usage: macos-entry.mjs entry <version> <arch> <url> <archive> | releases <out> | merge <out> <in...>');
     process.exit(2);
   }
 }
