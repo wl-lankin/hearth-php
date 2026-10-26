@@ -57,9 +57,12 @@ jobs:
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
           # Sources only (no --prefer-pre-built): libraries are built here from their upstream sources.
+          PIN=()
+          # Xdebug 3.5 needs PHP 8.2+; 3.4 is the last line that supports 8.1.
+          [ "${{ matrix.php }}" = "8.1" ] && PIN=(-U "xdebug:https://github.com/xdebug/xdebug/archive/refs/tags/3.4.7.tar.gz")
           # Hosted runners occasionally fail DNS or drop connections: retry before failing the build.
           for attempt in 1 2 3; do
-            ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug" && exit 0
+            ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug" "${PIN[@]}" && exit 0
             echo "::warning::download attempt $attempt failed"
             sleep $((attempt * 30))
           done
@@ -67,6 +70,12 @@ jobs:
       - name: Build PHP ${{ matrix.php }}
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
+          if [ "${{ matrix.php }}" = "8.1" ]; then
+            # PHP 8.1's bcmath still has K&R function definitions, which C23 (the compiler default
+            # now) rejects. spc keeps a value already set in the environment; this is its default
+            # plus -std=gnu17.
+            export SPC_CMD_VAR_PHP_MAKE_EXTRA_CFLAGS="-g -fstack-protector-strong -fpic -fpie -Werror=unknown-warning-option --target=${{ matrix.target.arch }}-apple-darwin -Os -std=gnu17"
+          fi
           ./spc build "$EXT" --build-cli --build-fpm --build-shared=xdebug
       - name: Build logs
         # spc keeps the compiler output in its log files, not in the step output.
@@ -139,6 +148,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # No successful build leaves the pattern unmatched: then there is nothing to upload.
+          shopt -s nullglob
           for file in builds/*/php-*-macos-*.tar.gz; do
             name="$(basename "$file")"
             version="${name#php-}"; version="${version%-macos-*}"
