@@ -57,9 +57,12 @@ jobs:
         run: |
           EXT="$(tr -d '\n ' < build/extensions.txt)"
           # Sources only (no --prefer-pre-built): libraries are built here from their upstream sources.
+          PIN=()
+          # Xdebug 3.5 needs PHP 8.2+; 3.4 is the last line that supports 8.1.
+          [ "${{ matrix.php }}" = "8.1" ] && PIN=(-U "xdebug:https://github.com/xdebug/xdebug/archive/refs/tags/3.4.7.tar.gz")
           # Hosted runners occasionally fail DNS or drop connections: retry before failing the build.
           for attempt in 1 2 3; do
-            ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug" && exit 0
+            ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug" "${PIN[@]}" && exit 0
             echo "::warning::download attempt $attempt failed"
             sleep $((attempt * 30))
           done
