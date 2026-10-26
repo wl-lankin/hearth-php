@@ -47,8 +47,9 @@ jobs:
 
   publish:
     needs: [plan, macos]
-    # Also runs when no macOS build was needed (macos skipped), never after a failed build.
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.macos.result != 'failure' }}
+    # Also runs when no macOS build was needed or one failed: the macOS entries come from the
+    # releases, so a failed build only leaves its version out until the next run.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
