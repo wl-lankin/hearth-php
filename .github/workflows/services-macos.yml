@@ -1,0 +1,80 @@
+name: services-macos
+
+# Builds the services that have no official macOS binaries (Redis, MariaDB) from their official
+# sources, for arm64 and x86_64, and smoke-tests each build. Like macos.yml, the build jobs run
+# third-party build scripts with a read-only token; a separate job with write access uploads the
+# finished archives to the releases <kind>-<version>. The catalog job hashes them from there.
+
+on:
+  workflow_dispatch:
+    inputs:
+      builds:
+        description: 'JSON list of {"kind":"redis|mariadb","version":"x.y.z"}'
+        required: true
+  workflow_call:
+    inputs:
+      builds:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(inputs.builds) }}
+        target:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-15-intel, arch: x86_64 }
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Build ${{ matrix.build.kind }} ${{ matrix.build.version }}
+        env:
+          # Read-only; only used to read the Redis release's published digest.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash "scripts/build-${{ matrix.build.kind }}.sh" "${{ matrix.build.version }}" out
+      - name: Archive
+        env:
+          KIND: ${{ matrix.build.kind }}
+          VERSION: ${{ matrix.build.version }}
+        run: |
+          tar czf "out/${KIND}-${VERSION}-macos-${{ matrix.target.arch }}.tar.gz" -C out "${KIND}-${VERSION}"
+          rm -rf "out/${KIND}-${VERSION}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: service-${{ matrix.build.kind }}-${{ matrix.build.version }}-${{ matrix.target.arch }}
+          path: out/*.tar.gz
+
+  release:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: service-*
+          path: builds
+      - name: Upload the archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          for file in builds/*/*-macos-*.tar.gz; do
+            name="$(basename "$file")"
+            tag="${name%-macos-*}"
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "${tag} for macOS" --notes "Built from the official source for Hearth." --latest=false
+            gh release upload "$tag" "$file" --repo "$GITHUB_REPOSITORY" --clobber
+          done
