@@ -69,12 +69,26 @@ jobs:
       - name: Upload the archives
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILDS: ${{ inputs.builds }}
         run: |
-          shopt -s nullglob
-          for file in builds/*/*-macos-*.tar.gz; do
-            name="$(basename "$file")"
-            tag="${name%-macos-*}"
-            gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-              || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "${tag} for macOS" --notes "Built from the official source for Hearth." --latest=false
-            gh release upload "$tag" "$file" --repo "$GITHUB_REPOSITORY" --clobber
+          # The build jobs ran third-party build scripts: take nothing from them but the exact files
+          # this run asked for (kind and version from the input, checked), and never replace an
+          # asset that is already published.
+          echo "$BUILDS" | jq -c '.[]' | while read -r build; do
+            kind="$(echo "$build" | jq -r .kind)"
+            version="$(echo "$build" | jq -r .version)"
+            [[ "$kind" =~ ^(redis|mariadb)$ ]] || { echo "::error::unexpected kind $kind"; exit 1; }
+            [[ "$version" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || { echo "::error::unexpected version $version"; exit 1; }
+            tag="${kind}-${version}"
+            for arch in arm64 x86_64; do
+              file="builds/service-${kind}-${version}-${arch}/${kind}-${version}-macos-${arch}.tar.gz"
+              [ -f "$file" ] || { echo "::warning::no ${arch} build of ${tag}"; continue; }
+              gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+                || gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "${tag} for macOS" --notes "Built from the official source for Hearth." --latest=false
+              if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qx "$(basename "$file")"; then
+                echo "$(basename "$file") is already published; left as it is"
+                continue
+              fi
+              gh release upload "$tag" "$file" --repo "$GITHUB_REPOSITORY"
+            done
           done
