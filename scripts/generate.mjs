@@ -1,11 +1,23 @@
 // Builds dist/manifest.json: Windows entries from php.net, macOS entries from macos-entries.json
 // (written by the macOS build workflow), Composer and the CA bundle.
 // Usage: node scripts/generate.mjs [--windows-only]
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { validate } from '../lib/manifest.mjs';
 import { caddyEntries } from './caddy.mjs';
 import { headersFor } from './plan.mjs';
+import {
+  githubDigestEntries,
+  mariadbEntries,
+  mysqlEntries,
+  postgresEntries,
+  siloEntries,
+  typesenseEntries,
+  withFallback,
+} from './services.mjs';
 import { QA, RELEASES, windowsEntries } from './windows.mjs';
 
 const REPO = process.env.GITHUB_REPOSITORY ?? 'wl-lankin/hearth-php';
@@ -54,6 +66,80 @@ async function caddy() {
   return caddyEntries({ release, checksums, fetchBytes: bytes });
 }
 
+/** The archive's top folder, read with the runner's own unzip/tar ('' when files sit at the top). */
+async function peek(buf, file) {
+  const path = join(tmpdir(), `peek-${process.pid}-${file}`);
+  writeFileSync(path, buf);
+  try {
+    const list = file.endsWith('.zip') ? execFileSync('unzip', ['-Z1', path]) : execFileSync('tar', ['-tzf', path]);
+    const tops = new Set(list.toString().split('\n').filter(Boolean).map((p) => p.split('/')[0]));
+    const [only] = tops;
+    return tops.size === 1 && list.toString().includes(`${only}/`) ? only : '';
+  } finally {
+    rmSync(path, { force: true });
+  }
+}
+
+/** The service entries of the catalog published now, by URL (reused instead of downloaded again). */
+async function publishedServices() {
+  try {
+    const current = await json(`https://github.com/${REPO}/releases/download/manifest/manifest.json`);
+    return new Map((current.services ?? []).map((s) => [s.url, s]));
+  } catch {
+    return new Map();
+  }
+}
+
+/** Every release of a repo: the API lists them by date, not by version, so one page is not enough. */
+async function allReleases(repo) {
+  const all = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const batch = await json(`https://api.github.com/repos/${repo}/releases?per_page=100&page=${page}`);
+    all.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return all;
+}
+
+async function services(pins) {
+  const known = await publishedServices();
+  const text = async (url) => (await get(url)).text();
+  const common = { fetchBytes: bytes, peek, known };
+  const latest = (repo) => json(`https://api.github.com/repos/${repo}/releases/latest`);
+  // One source failing (a vendor down, a release still uploading) keeps its published entries.
+  const each = (kind, run) => withFallback(kind, run, known);
+  // Redis and MariaDB for macOS: this repo's own builds (services-macos.yml).
+  const own = existsSync('services-macos-entries.json') ? JSON.parse(readFileSync('services-macos-entries.json', 'utf8')) : [];
+  const groups = await Promise.all([
+    each('mysql', () => mysqlEntries({ versions: pins.mysql, fetchText: text, ...common })),
+    each('mariadb', () => mariadbEntries({ versions: pins.mariadb, fetchText: text, ...common })),
+    each('postgresql', async () => postgresEntries({
+      releases: await allReleases('theseus-rs/postgresql-binaries'),
+      lines: ['18', '17'], fetchText: text, ...common,
+    })),
+    each('redis', async () => githubDigestEntries({
+      kind: 'redis', release: await latest('redis-windows/redis-windows'), ...common,
+      targets: [{ asset: (v) => `Redis-${v}-Windows-x64-msys2.zip`, os: 'windows', arch: 'x64', format: 'zip' }],
+    })),
+    each('meilisearch', async () => githubDigestEntries({
+      kind: 'meilisearch', release: await latest('meilisearch/meilisearch'), ...common,
+      targets: [
+        { asset: () => 'meilisearch-windows-amd64.exe', os: 'windows', arch: 'x64', format: 'binary' },
+        { asset: () => 'meilisearch-macos-apple-silicon', os: 'macos', arch: 'arm64', format: 'binary' },
+        { asset: () => 'meilisearch-macos-amd64', os: 'macos', arch: 'x86_64', format: 'binary' },
+      ],
+    })),
+    each('typesense', () => typesenseEntries({ versions: pins.typesense, ...common })),
+    each('silo', async () => {
+      const silo = await latest('pgsty/silo');
+      const sums = silo.assets.find((a) => /_checksums\.txt$/.test(a.name));
+      if (!sums) throw new Error('checksums.txt is missing');
+      return siloEntries({ release: silo, checksums: await text(sums.browser_download_url), ...common });
+    }),
+  ]);
+  return [...groups.flat(), ...own];
+}
+
 mkdirSync('dist', { recursive: true });
 const windowsOnly = process.argv.includes('--windows-only');
 const pins = JSON.parse(readFileSync('pins.json', 'utf8'));
@@ -72,6 +158,7 @@ const manifest = {
   composer: await composer(),
   cacert: { url: ca.url, sha256: ca.sha256 },
   tools: { caddy: await caddy() },
+  services: windowsOnly ? [] : await services(pins.services),
 };
 const errors = validate(manifest);
 if (errors.length) {

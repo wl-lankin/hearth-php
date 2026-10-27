@@ -26,6 +26,7 @@ jobs:
       contents: read
     outputs:
       minors: ${{ steps.plan.outputs.minors }}
+      services: ${{ steps.services.outputs.builds }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -37,6 +38,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: echo "minors=$(node scripts/plan.mjs)" >> "$GITHUB_OUTPUT"
+      - id: services
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Redis and MariaDB versions without both macOS builds yet (services-macos.yml).
+        run: echo "builds=$(node scripts/services-macos.mjs plan)" >> "$GITHUB_OUTPUT"
 
   macos:
     needs: plan
@@ -45,8 +51,15 @@ jobs:
     with:
       minors: ${{ needs.plan.outputs.minors }}
 
+  services:
+    needs: plan
+    if: needs.plan.outputs.services != '[]'
+    uses: ./.github/workflows/services-macos.yml
+    with:
+      builds: ${{ needs.plan.outputs.services }}
+
   publish:
-    needs: [plan, macos]
+    needs: [plan, macos, services]
     # Also runs when no macOS build was needed or one failed: the macOS entries come from the
     # releases, so a failed build only leaves its version out until the next run.
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
@@ -66,6 +79,10 @@ jobs:
           # hashed here. The token goes to the GitHub API only (headersFor).
           GH_TOKEN: ${{ github.token }}
         run: node scripts/macos-entry.mjs releases macos-entries.json
+      - name: Own macOS service builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/services-macos.mjs releases services-macos-entries.json
       - name: Generate the catalog
         env:
           # Only for GitHub API calls (Caddy's release); generate.mjs sends it to api.github.com only.
