@@ -24,10 +24,11 @@ async function entry({ kind, line, version, os, arch, format, url, algo, expecte
   return { kind, line, version, os, arch, url, sha256: digest('sha256', bytes), format, root };
 }
 
-/** "<hash>  <file>" lines (sha256sums.txt, checksums.txt, .md5, .sha256) as a map. */
+/** "<hash>  <file>" lines (sha256sums.txt, checksums.txt, .md5, .sha256) as a map; a binary-mode
+ * `*` and a leading `./` (MariaDB's lists) are dropped from the name. */
 function hashList(text) {
   return new Map(
-    text.split('\n').map((l) => l.trim().split(/\s+/)).filter((p) => p.length >= 2).map(([h, f]) => [f.replace(/^\*/, ''), h.toLowerCase()]),
+    text.split('\n').map((l) => l.trim().split(/\s+/)).filter((p) => p.length >= 2).map(([h, f]) => [f.replace(/^\*?(\.\/)?/, ''), h.toLowerCase()]),
   );
 }
 
