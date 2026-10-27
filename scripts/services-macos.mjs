@@ -53,7 +53,13 @@ async function main([command, out]) {
   const repo = process.env.GITHUB_REPOSITORY ?? 'wl-lankin/hearth-php';
   const headers = { 'User-Agent': 'hearth-php services', ...(process.env.GH_TOKEN ? { Authorization: `Bearer ${process.env.GH_TOKEN}` } : {}) };
   const api = async (path) => (await fetch(`https://api.github.com/${path}`, { headers })).json();
-  const releases = await api(`repos/${repo}/releases?per_page=100`);
+  // Every page: the php-<version> releases alone outgrow one page of 100.
+  const releases = [];
+  for (let page = 1; page <= 30; page += 1) {
+    const batch = await api(`repos/${repo}/releases?per_page=100&page=${page}`);
+    releases.push(...batch);
+    if (batch.length < 100) break;
+  }
   if (command === 'plan') {
     const pins = JSON.parse(readFileSync('pins.json', 'utf8')).services;
     const redis = (await api('repos/redis/redis/releases/latest')).tag_name;

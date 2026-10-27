@@ -146,3 +146,15 @@ export async function typesenseEntries({ versions, fetchBytes, peek, known }) {
   }
   return out;
 }
+
+/** Runs one source; when it fails (a vendor down, a release still uploading), its entries from the
+ * published catalog are kept so the rest of the catalog still updates. This repo's own macOS
+ * builds are left out here: they come from their own releases. */
+export async function withFallback(kind, run, known, warn = console.warn) {
+  try {
+    return await run();
+  } catch (e) {
+    warn(`${kind}: ${e.message}; keeping the published entries`);
+    return [...known.values()].filter((s) => s.kind === kind && !s.url.includes('/hearth-php/releases/'));
+  }
+}

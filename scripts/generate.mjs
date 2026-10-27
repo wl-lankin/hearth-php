@@ -16,6 +16,7 @@ import {
   postgresEntries,
   siloEntries,
   typesenseEntries,
+  withFallback,
 } from './services.mjs';
 import { QA, RELEASES, windowsEntries } from './windows.mjs';
 
@@ -105,23 +106,22 @@ async function services(pins) {
   const text = async (url) => (await get(url)).text();
   const common = { fetchBytes: bytes, peek, known };
   const latest = (repo) => json(`https://api.github.com/repos/${repo}/releases/latest`);
-  const silo = await latest('pgsty/silo');
-  const siloSums = silo.assets.find((a) => /_checksums\.txt$/.test(a.name));
-  if (!siloSums) throw new Error('silo: checksums.txt is missing');
+  // One source failing (a vendor down, a release still uploading) keeps its published entries.
+  const each = (kind, run) => withFallback(kind, run, known);
   // Redis and MariaDB for macOS: this repo's own builds (services-macos.yml).
   const own = existsSync('services-macos-entries.json') ? JSON.parse(readFileSync('services-macos-entries.json', 'utf8')) : [];
-  return [
-    ...(await mysqlEntries({ versions: pins.mysql, fetchText: text, ...common })),
-    ...(await mariadbEntries({ versions: pins.mariadb, fetchText: text, ...common })),
-    ...(await postgresEntries({
+  const groups = await Promise.all([
+    each('mysql', () => mysqlEntries({ versions: pins.mysql, fetchText: text, ...common })),
+    each('mariadb', () => mariadbEntries({ versions: pins.mariadb, fetchText: text, ...common })),
+    each('postgresql', async () => postgresEntries({
       releases: await allReleases('theseus-rs/postgresql-binaries'),
       lines: ['18', '17'], fetchText: text, ...common,
     })),
-    ...(await githubDigestEntries({
+    each('redis', async () => githubDigestEntries({
       kind: 'redis', release: await latest('redis-windows/redis-windows'), ...common,
       targets: [{ asset: (v) => `Redis-${v}-Windows-x64-msys2.zip`, os: 'windows', arch: 'x64', format: 'zip' }],
     })),
-    ...(await githubDigestEntries({
+    each('meilisearch', async () => githubDigestEntries({
       kind: 'meilisearch', release: await latest('meilisearch/meilisearch'), ...common,
       targets: [
         { asset: () => 'meilisearch-windows-amd64.exe', os: 'windows', arch: 'x64', format: 'binary' },
@@ -129,10 +129,15 @@ async function services(pins) {
         { asset: () => 'meilisearch-macos-amd64', os: 'macos', arch: 'x86_64', format: 'binary' },
       ],
     })),
-    ...(await typesenseEntries({ versions: pins.typesense, ...common })),
-    ...(await siloEntries({ release: silo, checksums: await text(siloSums.browser_download_url), ...common })),
-    ...own,
-  ];
+    each('typesense', () => typesenseEntries({ versions: pins.typesense, ...common })),
+    each('silo', async () => {
+      const silo = await latest('pgsty/silo');
+      const sums = silo.assets.find((a) => /_checksums\.txt$/.test(a.name));
+      if (!sums) throw new Error('checksums.txt is missing');
+      return siloEntries({ release: silo, checksums: await text(sums.browser_download_url), ...common });
+    }),
+  ]);
+  return [...groups.flat(), ...own];
 }
 
 mkdirSync('dist', { recursive: true });

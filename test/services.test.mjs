@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { validate } from '../lib/manifest.mjs';
 import {
   githubDigestEntries,
+  withFallback,
   mariadbEntries,
   mysqlEntries,
   postgresEntries,
@@ -134,4 +135,21 @@ test('the catalog accepts services and checks them', async () => {
   const errors = validate({ ...example, services: broken });
   assert.ok(errors.includes('services[0].kind oracle unknown'), errors.join('\n'));
   assert.ok(errors.includes('services[1].sha256 missing'), errors.join('\n'));
+});
+
+test('a source that fails keeps its published entries, without the own macOS builds', async () => {
+  const known = new Map([
+    ['https://cdn.mysql.com/a.zip', { kind: 'mysql', url: 'https://cdn.mysql.com/a.zip' }],
+    ['https://github.com/wl-lankin/hearth-php/releases/download/redis-8/r.tar.gz', { kind: 'redis', url: 'https://github.com/wl-lankin/hearth-php/releases/download/redis-8/r.tar.gz' }],
+    ['https://github.com/redis-windows/r.zip', { kind: 'redis', url: 'https://github.com/redis-windows/r.zip' }],
+  ]);
+  const warnings = [];
+  const failing = async () => {
+    throw new Error('HTTP 503');
+  };
+  const redis = await withFallback('redis', failing, known, (w) => warnings.push(w));
+  assert.deepEqual(redis.map((e) => e.url), ['https://github.com/redis-windows/r.zip']);
+  assert.match(warnings[0], /redis: HTTP 503; keeping the published entries/);
+  const fine = await withFallback('mysql', async () => [{ kind: 'mysql', url: 'new' }], known, () => {});
+  assert.deepEqual(fine.map((e) => e.url), ['new']);
 });
