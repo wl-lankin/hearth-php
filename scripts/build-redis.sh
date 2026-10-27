@@ -14,7 +14,8 @@ echo "${EXPECTED}  redis-src.tar.gz" | shasum -a 256 -c -
 
 mkdir -p redis-src && tar xzf redis-src.tar.gz -C redis-src --strip-components=1
 # The core server only (no modules), the system allocator, no TLS: a local development Redis.
-make -C redis-src -j"$(sysctl -n hw.ncpu)" MALLOC=libc BUILD_TLS=no
+# The top-level Makefile of Redis 8 also builds the modules; src/ is the server alone.
+make -C redis-src/src -j"$(sysctl -n hw.ncpu)" MALLOC=libc BUILD_TLS=no
 
 DIR="${OUT}/redis-${VERSION}"
 mkdir -p "${DIR}/bin"
