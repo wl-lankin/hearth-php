@@ -80,17 +80,30 @@ test('Redis for Windows and Meilisearch from GitHub releases, checked against th
   );
 });
 
-test('an entry already in the published catalog is reused without downloading again', async () => {
-  const url = 'https://dl.typesense.org/releases/30.2/typesense-server-30.2-darwin-arm64.tar.gz';
-  const published = { kind: 'typesense', line: '30', version: '30.2', os: 'macos', arch: 'arm64', url, sha256: 'c'.repeat(64), format: 'tar.gz', root: '' };
+test('a published entry is reused only when the vendor still states the same SHA-256', async () => {
+  const n = 'meilisearch-windows-amd64.exe';
+  const url = `https://github.com/x/y/releases/download/v1.56.0/${n}`;
+  const vendor = sha('sha256', body(n));
+  const release = { tag_name: 'v1.56.0', assets: [{ name: n, browser_download_url: url, digest: `sha256:${vendor}` }] };
+  const targets = [{ asset: () => n, os: 'windows', arch: 'x64', format: 'binary' }];
   let downloads = 0;
   const counting = async (u) => {
     downloads += 1;
     return fetchBytes(u);
   };
-  const entries = await typesenseEntries({ versions: ['30.2'], fetchBytes: counting, peek, known: new Map([[url, published]]) });
-  assert.deepEqual(entries[0], published);
-  assert.equal(downloads, 1, 'only the x86_64 build was new');
+  const entry = (hash) => ({ kind: 'meilisearch', line: '1', version: '1.56.0', os: 'windows', arch: 'x64', url, sha256: hash, format: 'binary', root: '' });
+  const same = await githubDigestEntries({ kind: 'meilisearch', release, targets, fetchBytes: counting, peek, known: new Map([[url, entry(vendor)]]) });
+  assert.equal(downloads, 0, 'the vendor hash vouches for the published entry');
+  assert.deepEqual(same[0], entry(vendor));
+  // A published entry that the vendor's hash does not back (tampered, or the file changed) is redone.
+  const redone = await githubDigestEntries({ kind: 'meilisearch', release, targets, fetchBytes: counting, peek, known: new Map([[url, entry('c'.repeat(64))]]) });
+  assert.equal(downloads, 1);
+  assert.equal(redone[0].sha256, vendor);
+  // Without any vendor hash (Typesense) there is nothing to vouch for a published entry.
+  const ts = 'https://dl.typesense.org/releases/30.2/typesense-server-30.2-darwin-arm64.tar.gz';
+  const tsEntry = { kind: 'typesense', line: '30', version: '30.2', os: 'macos', arch: 'arm64', url: ts, sha256: 'c'.repeat(64), format: 'tar.gz', root: '' };
+  await typesenseEntries({ versions: ['30.2'], fetchBytes: counting, peek, known: new Map([[ts, tsEntry]]) });
+  assert.equal(downloads, 3, 'both Typesense builds were downloaded again');
 });
 
 test('Silo from its release, checked against checksums.txt; its files carry their own version', async () => {

@@ -11,11 +11,12 @@ const fileOf = (url) => url.split('/').pop();
 const lineOf = (version, parts) => version.split('.').slice(0, parts).join('.');
 
 /** One checked entry: the download must hash to `expected` with `algo`. An entry the published
- * (signed) catalog already has for the same URL is taken as it is: vendor files at a URL do not
- * change, and re-downloading gigabytes every week would check nothing new. */
+ * catalog already has for the same URL is reused only when the vendor states that same SHA-256
+ * now (so a changed file or a tampered published entry is never carried over); without such a
+ * vendor hash the file is downloaded and hashed again. */
 async function entry({ kind, line, version, os, arch, format, url, algo, expected, fetchBytes, peek, known }) {
   const prior = known?.get(url);
-  if (prior) return prior;
+  if (prior && algo === 'sha256' && expected && prior.sha256 === expected) return { ...prior };
   const bytes = await fetchBytes(url);
   const file = fileOf(url);
   if (expected !== undefined && digest(algo, bytes) !== expected) throw new Error(`${file}: checksum mismatch`);
