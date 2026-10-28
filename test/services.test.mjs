@@ -37,7 +37,8 @@ test('MySQL from Oracle, checked against the published MD5', async () => {
 
 test('MariaDB for Windows from the archive, checked against sha256sums.txt', async () => {
   const file = 'mariadb-11.8.9-winx64.zip';
-  const fetchText = async () => `${sha('sha256', body(file))}  ${file}\n${'b'.repeat(64)}  other.msi\n`;
+  // The archive's list names every file as ./<file>.
+  const fetchText = async () => `${sha('sha256', body(file))}  ./${file}\n${'b'.repeat(64)}  ./other.msi\n`;
   const [entry] = await mariadbEntries({ versions: ['11.8.9'], fetchText, fetchBytes, peek });
   assert.deepEqual([entry.kind, entry.line, entry.os, entry.arch, entry.root], ['mariadb', '11.8', 'windows', 'x64', 'mariadb-11.8.9-winx64']);
   assert.equal(entry.url, 'https://archive.mariadb.org/mariadb-11.8.9/winx64-packages/mariadb-11.8.9-winx64.zip');
