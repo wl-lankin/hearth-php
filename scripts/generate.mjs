@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validate } from '../lib/manifest.mjs';
+import { retrying } from '../lib/retry.mjs';
 import { caddyEntries } from './caddy.mjs';
 import { headersFor } from './plan.mjs';
 import {
@@ -32,15 +33,17 @@ async function get(url) {
   return res;
 }
 
-const json = async (url) => (await get(url)).json();
-const bytes = async (url) => Buffer.from(await (await get(url)).arrayBuffer());
+// The whole read is tried again: a slow download can also drop halfway through the body.
+const json = (url) => retrying(async () => (await get(url)).json());
+const text = (url) => retrying(async () => (await get(url)).text());
+const bytes = (url) => retrying(async () => Buffer.from(await (await get(url)).arrayBuffer()));
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
 async function composer() {
   const { stable } = await json('https://getcomposer.org/versions');
   const version = stable[0].version;
   const url = `https://getcomposer.org/download/${version}/composer.phar`;
-  const published = (await (await get(`${url}.sha256sum`)).text()).trim().split(/\s+/)[0];
+  const published = (await text(`${url}.sha256sum`)).trim().split(/\s+/)[0];
   const actual = sha256(await bytes(url));
   if (published !== actual) throw new Error(`composer ${version}: published hash does not match the download`);
   return { version, url, sha256: actual };
@@ -49,7 +52,7 @@ async function composer() {
 /** The CA bundle is re-hosted under its hash, so the URL in a manifest never changes content. */
 async function cacert() {
   const pem = await bytes('https://curl.se/ca/cacert.pem');
-  const published = (await (await get('https://curl.se/ca/cacert.pem.sha256')).text()).trim().split(/\s+/)[0];
+  const published = (await text('https://curl.se/ca/cacert.pem.sha256')).trim().split(/\s+/)[0];
   const hash = sha256(pem);
   if (published !== hash) throw new Error('cacert.pem: published hash does not match the download');
   const file = `cacert-${hash.slice(0, 12)}.pem`;
@@ -62,7 +65,7 @@ async function caddy() {
   const version = release.tag_name.replace(/^v/, '');
   const sums = release.assets.find((a) => a.name === `caddy_${version}_checksums.txt`);
   if (!sums) throw new Error(`caddy ${version}: checksums.txt is missing`);
-  const checksums = await (await get(sums.browser_download_url)).text();
+  const checksums = await text(sums.browser_download_url);
   return caddyEntries({ release, checksums, fetchBytes: bytes });
 }
 
@@ -103,7 +106,6 @@ async function allReleases(repo) {
 
 async function services(pins) {
   const known = await publishedServices();
-  const text = async (url) => (await get(url)).text();
   const common = { fetchBytes: bytes, peek, known };
   const latest = (repo) => json(`https://api.github.com/repos/${repo}/releases/latest`);
   // One source failing (a vendor down, a release still uploading) keeps its published entries.
