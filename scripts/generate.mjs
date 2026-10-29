@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { validate } from '../lib/manifest.mjs';
 import { retrying } from '../lib/retry.mjs';
 import { caddyEntries } from './caddy.mjs';
+import { nodeEntries } from './node.mjs';
 import { headersFor } from './plan.mjs';
 import {
   githubDigestEntries,
@@ -83,15 +84,16 @@ async function peek(buf, file) {
   }
 }
 
-/** The service entries of the catalog published now, by URL (reused instead of downloaded again). */
-async function publishedServices() {
+/** The catalog published now ({} before the first one): its entries are reused instead of downloaded again. */
+async function published() {
   try {
-    const current = await json(`https://github.com/${REPO}/releases/download/manifest/manifest.json`);
-    return new Map((current.services ?? []).map((s) => [s.url, s]));
+    return await json(`https://github.com/${REPO}/releases/download/manifest/manifest.json`);
   } catch {
-    return new Map();
+    return {};
   }
 }
+
+const byUrl = (entries) => new Map((entries ?? []).map((e) => [e.url, e]));
 
 /** Every release of a repo: the API lists them by date, not by version, so one page is not enough. */
 async function allReleases(repo) {
@@ -104,8 +106,8 @@ async function allReleases(repo) {
   return all;
 }
 
-async function services(pins) {
-  const known = await publishedServices();
+async function services(pins, current) {
+  const known = byUrl(current.services);
   const common = { fetchBytes: bytes, peek, known };
   const latest = (repo) => json(`https://api.github.com/repos/${repo}/releases/latest`);
   // One source failing (a vendor down, a release still uploading) keeps its published entries.
@@ -142,6 +144,16 @@ async function services(pins) {
   return [...groups.flat(), ...own];
 }
 
+/** Node.js; when nodejs.org fails, the published entries are kept. */
+async function node(minMajor, current) {
+  try {
+    return await nodeEntries({ index: await json('https://nodejs.org/dist/index.json'), minMajor, fetchText: text, fetchBytes: bytes, known: byUrl(current.node) });
+  } catch (e) {
+    console.warn(`node: ${e.message}; keeping the published entries`);
+    return current.node ?? [];
+  }
+}
+
 mkdirSync('dist', { recursive: true });
 const windowsOnly = process.argv.includes('--windows-only');
 const pins = JSON.parse(readFileSync('pins.json', 'utf8'));
@@ -153,6 +165,7 @@ const windows = await windowsEntries({
 });
 const macos = !windowsOnly && existsSync('macos-entries.json') ? JSON.parse(readFileSync('macos-entries.json', 'utf8')) : [];
 const ca = await cacert();
+const current = windowsOnly ? {} : await published();
 const manifest = {
   schema: 1,
   generated: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
@@ -160,7 +173,8 @@ const manifest = {
   composer: await composer(),
   cacert: { url: ca.url, sha256: ca.sha256 },
   tools: { caddy: await caddy() },
-  services: windowsOnly ? [] : await services(pins.services),
+  services: windowsOnly ? [] : await services(pins.services, current),
+  node: windowsOnly ? [] : await node(pins.node.minMajor, current),
 };
 const errors = validate(manifest);
 if (errors.length) {
