@@ -77,9 +77,11 @@ test('entries from releases list spx only where the archive holds it', async () 
   const releases = [
     { tag_name: 'php-8.4.27', assets: [asset('8.4.27', 'arm64')] },
     { tag_name: 'php-8.3.36', assets: [asset('8.3.36', 'arm64')] },
+    { tag_name: 'php-8.5.1', assets: [asset('8.5.1', 'arm64')] },
   ];
   const archives = {
-    '8.4.27': tarGz([{ name: 'php-8.4.27/lib/spx.so', body: 'so' }]),
+    '8.4.27': tarGz([{ name: 'php-8.4.27/lib/spx.so', body: 'so' }, { name: 'php-8.4.27/share/spx/web-ui/report.html', body: '<html>' }]),
+    '8.5.1': tarGz([{ name: 'php-8.5.1/lib/spx.so', body: 'so' }]),
     '8.3.36': tarGz([{ name: 'php-8.3.36/lib/xdebug.so', body: 'so' }]),
   };
   const inspect = async (url) => {
@@ -87,7 +89,7 @@ test('entries from releases list spx only where the archive holds it', async () 
     return archiveFacts(archives[version], `php-${version}`);
   };
   const entries = await entriesFromReleases(repo, releases, inspect);
-  assert.deepEqual(entries.map((e) => `${e.version}:${e.extensions.spx?.kind ?? '-'}`), ['8.3.36:-', '8.4.27:so']);
+  assert.deepEqual(entries.map((e) => `${e.version}:${e.extensions.spx?.kind ?? '-'}`), ['8.3.36:-', '8.4.27:so', '8.5.1:-'], 'spx without its web UI cannot show a report');
   assert.match(entries[0].sha256, /^[0-9a-f]{64}$/);
 });
 

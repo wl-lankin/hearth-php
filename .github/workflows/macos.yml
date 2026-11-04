@@ -12,6 +12,10 @@ on:
       minors:
         description: 'PHP minors as a JSON list'
         default: '["8.1","8.2","8.3","8.4","8.5"]'
+      release:
+        description: 'Upload the builds as releases'
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       minors:
@@ -102,6 +106,12 @@ jobs:
           # Where spc puts shared extensions is not documented: take the one it built.
           cp "$(find buildroot -name xdebug.so | head -n 1)" "$DIR/lib/xdebug.so"
           cp "$(find buildroot -name spx.so | head -n 1)" "$DIR/lib/spx.so"
+          # SPX serves its report pages from files baked in at build time as a runner path: ship
+          # them, Hearth sets spx.http_ui_assets_dir to this folder.
+          UI="$(find source buildroot -type d -path '*assets/web-ui' | head -n 1)"
+          [ -f "$UI/report.html" ] || { echo "::error::SPX web UI not found"; exit 1; }
+          mkdir -p "$DIR/share/spx"
+          cp -R "$UI" "$DIR/share/spx/web-ui"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
       - name: Smoke test
@@ -121,6 +131,15 @@ jobs:
           echo '<?php function f($n) { return $n < 2 ? $n : f($n - 1) + f($n - 2); } echo f(15);' > spx.php
           SPX_ENABLED=1 SPX_REPORT=full "$DIR/bin/php" -d "extension=$PWD/$DIR/lib/spx.so" -d "spx.data_dir=$PWD/spxdata" spx.php
           ls spxdata/*.json spxdata/*.txt.gz
+          # Its web UI answers over HTTP with the settings Hearth writes (the CLI never serves it).
+          mkdir spxweb && echo '<?php echo "app";' > spxweb/index.php
+          "$DIR/bin/php" -d "extension=$PWD/$DIR/lib/spx.so" -d spx.http_enabled=1 -d spx.http_key=k \
+            -d spx.http_ip_whitelist=127.0.0.1 -d "spx.http_ui_assets_dir=$PWD/$DIR/share/spx/web-ui" \
+            -d "spx.data_dir=$PWD/spxdata" -S 127.0.0.1:8765 -t spxweb >/dev/null 2>&1 &
+          SERVER=$!
+          sleep 2
+          curl -fsS "http://127.0.0.1:8765/?SPX_KEY=k&SPX_UI_URI=/report.html" | grep -qi '<html'
+          kill "$SERVER"
           printf '[global]\nerror_log=/tmp/fpm.log\n[www]\nlisten=127.0.0.1:9999\npm=static\npm.max_children=1\n' > fpm.conf
           "$DIR/sbin/php-fpm" -t -y fpm.conf
       - name: Archive and catalog entry
@@ -140,8 +159,8 @@ jobs:
 
   release:
     needs: build
-    # A dispatch has no `release` input: it releases, as before.
-    if: ${{ !cancelled() && inputs.release != false }}
+    # Both triggers declare `release` (default true); pull request checks pass false.
+    if: ${{ !cancelled() && inputs.release }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -36,9 +36,13 @@ export function tarHas(gz, path) {
   return false;
 }
 
-/** The SHA-256 of a PHP archive and whether it has SPX (`<root>/lib/spx.so`). */
+/**
+ * The SHA-256 of a PHP archive and whether it has SPX: `<root>/lib/spx.so` plus its web UI in
+ * `<root>/share/spx/web-ui` (Hearth points spx.http_ui_assets_dir there; without it no report opens).
+ */
 export function archiveFacts(gz, root) {
-  return { sha256: createHash('sha256').update(gz).digest('hex'), spx: tarHas(gz, `${root}/lib/spx.so`) };
+  const spx = tarHas(gz, `${root}/lib/spx.so`) && tarHas(gz, `${root}/share/spx/web-ui/report.html`);
+  return { sha256: createHash('sha256').update(gz).digest('hex'), spx };
 }
 
 export function macosEntry({ version, arch, url, sha256, size, spx = false }) {
