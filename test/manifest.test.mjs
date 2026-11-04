@@ -23,6 +23,14 @@ test('a downloadable extension needs url and sha256, a builtin one does not', ()
   assert.ok(validate(broken).includes('php[0].extensions.redis.sha256 missing'));
 });
 
+test('a plain shared extension (so) needs its file', () => {
+  const withSpx = structuredClone(example);
+  withSpx.php[0].extensions.spx = { kind: 'so', file: 'lib/spx.so' };
+  assert.deepEqual(validate(withSpx), []);
+  delete withSpx.php[0].extensions.spx.file;
+  assert.ok(validate(withSpx).includes('php[0].extensions.spx.file missing'));
+});
+
 test('pickLatest reads the php.net feed per minor with the right compiler', () => {
   const feed = {
     '8.0': { version: '8.0.30', 'nts-vs16-x64': { zip: { path: 'php-8.0.30-nts-Win32-vs16-x64.zip', sha256: sha, size: '25.0MB' } } },

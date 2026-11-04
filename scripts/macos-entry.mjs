@@ -5,10 +5,46 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 
 const byVersion = (a, b) => a.localeCompare(b, 'en', { numeric: true });
 
-export function macosEntry({ version, arch, url, sha256, size }) {
+/**
+ * Whether the tar.gz in `gz` holds a regular file at `path`. Reads ustar headers (with their
+ * prefix field) and pax `path` records, which is what macOS tar writes.
+ */
+export function tarHas(gz, path) {
+  const tar = gunzipSync(gz);
+  const text = (from, len) => tar.subarray(from, from + len).toString('utf8').replace(/\0.*$/s, '');
+  let paxPath = null;
+  for (let at = 0; at + 512 <= tar.length; ) {
+    if (tar.subarray(at, at + 512).every((b) => b === 0)) break;
+    const size = parseInt(text(at + 124, 12).trim() || '0', 8);
+    const type = text(at + 156, 1) || '0';
+    const prefix = text(at + 257, 6) === 'ustar' ? text(at + 345, 155) : '';
+    const body = tar.subarray(at + 512, at + 512 + size);
+    if (type === 'x') {
+      // Records "<length> key=value\n": only the path matters here.
+      paxPath = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(`\n${body.toString('utf8')}`)?.[1] ?? null;
+    } else {
+      const name = paxPath ?? (prefix ? `${prefix}/${text(at, 100)}` : text(at, 100));
+      paxPath = null;
+      if (type === '0' && name.replace(/^\.\//, '') === path) return true;
+    }
+    at += 512 + Math.ceil(size / 512) * 512;
+  }
+  return false;
+}
+
+/** The SHA-256 of a PHP archive and whether it has SPX (`<root>/lib/spx.so`). */
+export function archiveFacts(gz, root) {
+  return { sha256: createHash('sha256').update(gz).digest('hex'), spx: tarHas(gz, `${root}/lib/spx.so`) };
+}
+
+export function macosEntry({ version, arch, url, sha256, size, spx = false }) {
+  const extensions = { redis: { kind: 'builtin' }, xdebug: { kind: 'zend_so', file: 'lib/xdebug.so' } };
+  // Only builds from before SPX was added lack it: their entries must not promise it.
+  if (spx) extensions.spx = { kind: 'so', file: 'lib/spx.so' };
   return {
     minor: version.split('.').slice(0, 2).join('.'),
     version,
@@ -20,7 +56,7 @@ export function macosEntry({ version, arch, url, sha256, size }) {
     size,
     format: 'tar.gz',
     root: `php-${version}`,
-    extensions: { redis: { kind: 'builtin' }, xdebug: { kind: 'zend_so', file: 'lib/xdebug.so' } },
+    extensions,
   };
 }
 
@@ -37,10 +73,11 @@ export function checkEntry(repo, e) {
 
 /**
  * The catalog entries of every macOS build already released here: archives named
- * php-<version>-macos-<arch>.tar.gz in the release php-<version>. `hash(url)` returns an archive's
- * SHA-256. The releases are the source of truth, so no entry depends on an earlier catalog.
+ * php-<version>-macos-<arch>.tar.gz in the release php-<version>. `inspect(url)` returns an
+ * archive's `archiveFacts`. The releases are the source of truth, so no entry depends on an earlier
+ * catalog.
  */
-export async function entriesFromReleases(repo, releases, hash) {
+export async function entriesFromReleases(repo, releases, inspect) {
   const entries = [];
   for (const release of releases) {
     const version = release.tag_name.startsWith('php-') ? release.tag_name.slice(4) : null;
@@ -49,7 +86,8 @@ export async function entriesFromReleases(repo, releases, hash) {
       const match = /^php-(.+)-macos-(arm64|x86_64)\.tar\.gz$/.exec(asset.name);
       if (!match || match[1] !== version) continue;
       const url = `https://github.com/${repo}/releases/download/php-${version}/${asset.name}`;
-      entries.push(macosEntry({ version, arch: match[2], url, sha256: await hash(url), size: asset.size }));
+      const { sha256, spx } = await inspect(url);
+      entries.push(macosEntry({ version, arch: match[2], url, sha256, spx, size: asset.size }));
     }
   }
   return mergeEntries(entries);
@@ -70,20 +108,21 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, ...args] = process.argv.slice(2);
   if (command === 'entry') {
     const [version, arch, url, archive] = args;
-    const sha256 = createHash('sha256').update(readFileSync(archive)).digest('hex');
-    console.log(JSON.stringify(macosEntry({ version, arch, url, sha256, size: statSync(archive).size })));
+    const { sha256, spx } = archiveFacts(readFileSync(archive), `php-${version}`);
+    console.log(JSON.stringify(macosEntry({ version, arch, url, sha256, spx, size: statSync(archive).size })));
   } else if (command === 'releases') {
     const [out] = args;
     const repo = process.env.GITHUB_REPOSITORY ?? 'wl-lankin/hearth-php';
     const { headersFor } = await import('./plan.mjs');
     const api = `https://api.github.com/repos/${repo}/releases?per_page=100`;
     const releases = await (await fetch(api, { headers: headersFor(api, process.env.GH_TOKEN) })).json();
-    const hash = async (url) => {
+    const inspect = async (url) => {
       const res = await fetch(url, { headers: { 'User-Agent': 'hearth-php' }, redirect: 'follow' });
       if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-      return createHash('sha256').update(Buffer.from(await res.arrayBuffer())).digest('hex');
+      const version = /\/php-([^/]+)\/php-/.exec(url)[1];
+      return archiveFacts(Buffer.from(await res.arrayBuffer()), `php-${version}`);
     };
-    const entries = await entriesFromReleases(repo, Array.isArray(releases) ? releases : [], hash);
+    const entries = await entriesFromReleases(repo, Array.isArray(releases) ? releases : [], inspect);
     entries.forEach((e) => checkEntry(repo, e));
     writeFileSync(out, `${JSON.stringify(entries, null, 2)}\n`);
     console.log(`${out}: ${entries.length} macOS builds`);

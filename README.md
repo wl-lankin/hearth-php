@@ -10,7 +10,7 @@ Every week a workflow publishes `manifest.json` and its minisign signature to th
 ## Manifest format (schema 1)
 
 - `php[]`: one build per minor, OS and architecture: `minor`, `version`, `channel` (`stable` or `rc`), `os` (`windows`, `macos`), `arch` (`x64`, `arm64`, `x86_64`), `url`, `sha256`, `size`, `format` (`zip`, `tar.gz`), `root` (folder inside the archive, empty for none) and `extensions`.
-- `extensions.<name>.kind`: `builtin` (compiled in), `dll` or `zend_dll` (Windows: a zip at `url` holding `file`), `zend_so` (macOS: `file` inside the PHP archive).
+- `extensions.<name>.kind`: `builtin` (compiled in), `dll` or `zend_dll` (Windows: a zip at `url` holding `file`), `zend_so` or `so` (macOS: `file` inside the PHP archive, loaded with `zend_extension=` or `extension=`). `spx` is listed only for archives that contain it.
 - `node[]`: the newest Node.js release of every major from `pins.json` `node.minMajor` up: `major`, `version`, `lts` (codename or null), `os`, `arch`, `url`, `sha256`, `format`, `root`. Checked against nodejs.org's SHASUMS256.txt.
 - `composer` and `cacert`: `url` and `sha256` of Composer and the CA bundle.
 
