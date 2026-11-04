@@ -17,6 +17,10 @@ on:
       minors:
         type: string
         default: '["8.1","8.2","8.3","8.4","8.5"]'
+      # false: build and smoke-test only (pull requests); nothing is uploaded.
+      release:
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -62,7 +66,7 @@ jobs:
           [ "${{ matrix.php }}" = "8.1" ] && PIN=(-U "xdebug:https://github.com/xdebug/xdebug/archive/refs/tags/3.4.7.tar.gz")
           # Hosted runners occasionally fail DNS or drop connections: retry before failing the build.
           for attempt in 1 2 3; do
-            ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug" "${PIN[@]}" && exit 0
+            ./spc download --with-php=${{ matrix.php }} --for-extensions="$EXT,xdebug,spx" "${PIN[@]}" && exit 0
             echo "::warning::download attempt $attempt failed"
             sleep $((attempt * 30))
           done
@@ -76,7 +80,7 @@ jobs:
             # plus -std=gnu17.
             export SPC_CMD_VAR_PHP_MAKE_EXTRA_CFLAGS="-g -fstack-protector-strong -fpic -fpie -Werror=unknown-warning-option --target=${{ matrix.target.arch }}-apple-darwin -Os -std=gnu17"
           fi
-          ./spc build "$EXT" --build-cli --build-fpm --build-shared=xdebug
+          ./spc build "$EXT" --build-cli --build-fpm --build-shared=xdebug,spx
       - name: Build logs
         # spc keeps the compiler output in its log files, not in the step output.
         if: failure()
@@ -97,6 +101,7 @@ jobs:
           cp buildroot/bin/php-fpm "$DIR/sbin/php-fpm"
           # Where spc puts shared extensions is not documented: take the one it built.
           cp "$(find buildroot -name xdebug.so | head -n 1)" "$DIR/lib/xdebug.so"
+          cp "$(find buildroot -name spx.so | head -n 1)" "$DIR/lib/spx.so"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
       - name: Smoke test
@@ -110,6 +115,12 @@ jobs:
             echo "$MODULES" | grep -qx "$name" || { echo "::error::$ext is missing"; exit 1; }
           done
           "$DIR/bin/php" -d "zend_extension=$PWD/$DIR/lib/xdebug.so" -v | grep -q Xdebug
+          # SPX loads and writes a full report (metadata .json + .txt.gz) where Hearth points it.
+          "$DIR/bin/php" -d "extension=$PWD/$DIR/lib/spx.so" -m | grep -qix spx
+          mkdir spxdata
+          echo '<?php function f($n) { return $n < 2 ? $n : f($n - 1) + f($n - 2); } echo f(15);' > spx.php
+          SPX_ENABLED=1 SPX_REPORT=full "$DIR/bin/php" -d "extension=$PWD/$DIR/lib/spx.so" -d "spx.data_dir=$PWD/spxdata" spx.php
+          ls spxdata/*.json spxdata/*.txt.gz
           printf '[global]\nerror_log=/tmp/fpm.log\n[www]\nlisten=127.0.0.1:9999\npm=static\npm.max_children=1\n' > fpm.conf
           "$DIR/sbin/php-fpm" -t -y fpm.conf
       - name: Archive and catalog entry
@@ -129,7 +140,8 @@ jobs:
 
   release:
     needs: build
-    if: ${{ !cancelled() }}
+    # A dispatch has no `release` input: it releases, as before.
+    if: ${{ !cancelled() && inputs.release != false }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

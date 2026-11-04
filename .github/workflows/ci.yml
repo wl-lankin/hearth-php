@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       builds: ${{ steps.diff.outputs.builds }}
+      php: ${{ steps.diff.outputs.php }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -36,6 +37,11 @@ jobs:
       - id: diff
         run: |
           changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          php=false
+          if echo "$changed" | grep -qE '^(\.github/workflows/macos\.yml|build/extensions\.txt|scripts/macos-entry\.mjs)$'; then
+            php=true
+          fi
+          echo "php=${php}" >> "$GITHUB_OUTPUT"
           builds="[]"
           if echo "$changed" | grep -qE '^(scripts/build-|scripts/services-macos|\.github/workflows/services-macos)'; then
             redis="$(curl -fsSL https://api.github.com/repos/redis/redis/releases/latest | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).tag_name))')"
@@ -67,3 +73,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash "scripts/build-${{ matrix.build.kind }}.sh" "${{ matrix.build.version }}" out
+
+  # The macOS PHP build (oldest and newest minor) on pull requests that change it: built and
+  # smoke-tested only, never released.
+  php-macos:
+    needs: changes
+    if: needs.changes.outputs.php == 'true'
+    # The called workflow names a release job that needs write access; with release: false it
+    # never runs, but a caller must still allow what the called jobs ask for.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/macos.yml
+    with:
+      minors: '["8.1","8.5"]'
+      release: false
